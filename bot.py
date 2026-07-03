@@ -1,4 +1,4 @@
-# bot.py - Render Uyumlu, Tüm Hatalar Giderilmiş
+# bot.py - Cloudflare Korumalı, Butonlu Sistem
 import os
 import re
 import json
@@ -10,13 +10,16 @@ import time
 import logging
 from datetime import datetime
 from typing import Dict, List, Tuple
+from urllib.parse import urlparse, parse_qs
 
-# Telegram kütüphanesi - Düzeltilmiş import
+# Cloudflare bypass için ek kütüphaneler
 try:
+    import cloudscraper
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.3"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "cloudscraper", "python-telegram-bot==20.7"])
+    import cloudscraper
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -39,8 +42,14 @@ APIS = {
     "sulale": "https://arastir.vip/api/sulale.php?tc={}"
 }
 
-# Yasaklı Kelimeler
-BANNED_WORDS = ["#404", "#banned", "#kurucu", "#team", "#telegram"]
+# Cloudflare için scraper
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'mobile': False
+    }
+)
 
 # Logging
 logging.basicConfig(
@@ -62,9 +71,7 @@ def init_db():
         is_banned INTEGER DEFAULT 0,
         query_count INTEGER DEFAULT 0
     )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS admins (
-        user_id INTEGER PRIMARY KEY
-    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)''')
     c.execute('''CREATE TABLE IF NOT EXISTS bans (
         user_id INTEGER PRIMARY KEY,
         reason TEXT,
@@ -84,22 +91,21 @@ def init_db():
 
 init_db()
 
-# ============ BOT ============
+# ============ BOT SINIFI ============
 class BotSystem:
     def __init__(self):
         self.application = None
         self.running = False
         self.start_time = datetime.now()
         self.rate_limits = {}
+        self.user_states = {}  # Kullanıcı durumları için
 
     def start(self):
         try:
             logger.info("🚀 Bot başlatılıyor...")
-            
-            # Application oluştur
             self.application = Application.builder().token(BOT_TOKEN).build()
             
-            # Komutlar
+            # Komutlar (Sadece temel komutlar)
             self.application.add_handler(CommandHandler("start", self.start_cmd))
             self.application.add_handler(CommandHandler("admin", self.admin_cmd))
             self.application.add_handler(CommandHandler("stats", self.stats_cmd))
@@ -115,22 +121,15 @@ class BotSystem:
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
             
             self.running = True
+            logger.info("✅ Bot çalışıyor...")
             self.application.run_polling()
             
         except Exception as e:
             logger.error(f"❌ Bot hatası: {e}")
             self.running = False
+            raise
 
-    def stop(self):
-        if self.application and self.running:
-            try:
-                self.application.stop()
-            except:
-                pass
-            self.running = False
-            logger.info("🛑 Bot durduruldu")
-
-    # ============ KOMUTLAR ============
+    # ============ ANA MENÜ ============
     async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not await self.check_channels(update, context):
@@ -138,179 +137,217 @@ class BotSystem:
         
         self.register_user(user)
         
+        # Ana menü butonları
+        keyboard = [
+            [InlineKeyboardButton("🔍 TC Sorgula", callback_data="sorgu_tc")],
+            [InlineKeyboardButton("👤 Ad Soyad Sorgula", callback_data="sorgu_adsoyad")],
+            [InlineKeyboardButton("📍 Adres Sorgula", callback_data="sorgu_adres")],
+            [InlineKeyboardButton("📱 GSM'den TC", callback_data="sorgu_gsmtc")],
+            [InlineKeyboardButton("🆔 TC'den GSM", callback_data="sorgu_tcgsm")],
+            [InlineKeyboardButton("🏢 İş Yeri Sorgula", callback_data="sorgu_isyeri")],
+            [InlineKeyboardButton("👨‍👩‍👧‍👦 Sülale Sorgula", callback_data="sorgu_sulale")],
+            [InlineKeyboardButton("📊 İstatistikler", callback_data="istatistik")],
+            [InlineKeyboardButton("❓ Yardım", callback_data="yardim")]
+        ]
+        
+        # Admin butonu
+        if self.is_admin(user.id):
+            keyboard.append([InlineKeyboardButton("🔧 Admin Paneli", callback_data="admin_panel")])
+        
         text = f"""
 🔍 **HOŞGELDİNİZ!** 🔍
 
 Merhaba {user.first_name}!
 
-📋 **KULLANIM:**
-`tc 12345678901`
-`adsoyad Ad Soyad İl İlçe`
-`adres 12345678901`
-`gsmtc 5551234567`
-`tcgsm 12345678901`
-`isyeri 12345678901`
-`sulale 12345678901`
-
-⚠️ **KURALLAR:**
-• Günde 50 sorgu limiti
-• Yasaklı kelimeler: #404, #banned, #kurucu, #team, #telegram
-• 3 kanala üyelik zorunlu
+Aşağıdaki butonlardan sorgulama yapabilirsiniz.
+📋 **KURALLAR:** Günde 50 sorgu limiti
 
 📊 **İSTATİSTİK:**
-• Toplam sorgu: {self.get_total_queries()}
 • Bugün: {self.get_today_queries()}
 • Kullanıcı: {self.get_user_count()}
 """
-        await update.message.reply_text(text, parse_mode='Markdown')
+        
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
-    async def admin_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ============ CALLBACK İŞLEMLERİ ============
+    async def callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        data = query.data
+        
+        # Ban kontrolü
+        if self.is_banned(user_id):
+            await query.edit_message_text("❌ Banlısınız!")
+            return
+        
+        # Kanal kontrolü
+        if not await self.check_channels_callback(update, context):
+            return
+        
+        # Sorgu menüleri
+        if data.startswith("sorgu_"):
+            sorgu_tipi = data.replace("sorgu_", "")
+            self.user_states[user_id] = f"bekle_{sorgu_tipi}"
+            
+            mesajlar = {
+                "tc": "📝 TC kimlik numarasını girin:\nÖrnek: `12345678901`",
+                "adsoyad": "📝 Ad, Soyad, İl ve İlçe girin:\nÖrnek: `Ahmet Yılmaz İstanbul Kadıköy`",
+                "adres": "📝 TC kimlik numarasını girin:\nÖrnek: `12345678901`",
+                "gsmtc": "📝 GSM numarasını girin:\nÖrnek: `5551234567`",
+                "tcgsm": "📝 TC kimlik numarasını girin:\nÖrnek: `12345678901`",
+                "isyeri": "📝 TC kimlik numarasını girin:\nÖrnek: `12345678901`",
+                "sulale": "📝 TC kimlik numarasını girin:\nÖrnek: `12345678901`"
+            }
+            
+            await query.edit_message_text(
+                mesajlar.get(sorgu_tipi, "📝 Parametreleri girin:"),
+                parse_mode='Markdown'
+            )
+            
+            # Geri butonu
+            keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="ana_menü")]]
+            await query.message.reply_text(
+                "🔄 İptal etmek için butona tıklayın:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+        elif data == "ana_menü":
+            await self.start_cmd(update, context)
+            
+        elif data == "istatistik":
+            await self.stats_cmd(update, context)
+            
+        elif data == "yardim":
+            help_text = """
+📚 **YARDIM MENÜSÜ**
+
+🔍 **Sorgulama Türleri:**
+• TC Kimlik Sorgulama
+• Ad Soyad Sorgulama
+• Adres Sorgulama
+• GSM'den TC Bulma
+• TC'den GSM Bulma
+• İş Yeri Sorgulama
+• Sülale Sorgulama
+
+📋 **KURALLAR:**
+• Günde 50 sorgu
+• Yasaklı kelimeler engelli
+• Spam yapmayın
+
+👑 **Adminler İçin:**
+• /admin - Admin paneli
+• /ban - Kullanıcı banla
+• /unban - Ban kaldır
+• /duyuru - Duyuru gönder
+"""
+            await query.edit_message_text(help_text, parse_mode='Markdown')
+            
+            keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="ana_menü")]]
+            await query.message.reply_text(
+                "Ana menüye dönmek için:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+        elif data == "admin_panel":
+            if not self.is_admin(user_id):
+                await query.edit_message_text("⛔ Yetkiniz yok!")
+                return
+            await self.admin_panel(update, context)
+            
+        elif data.startswith("admin_"):
+            await self.admin_callback_handler(query, data, context)
+        
+        # Admin işlemleri
+        elif data == "admin_stats":
+            await self.stats_cmd(update, context)
+        elif data == "admin_users":
+            await self.show_users(query)
+        elif data == "admin_bans":
+            await self.show_bans(query)
+        elif data == "admin_announce":
+            await query.edit_message_text("📢 Duyuru mesajını girin:")
+            self.user_states[user_id] = "bekle_duyuru"
+        elif data == "admin_clone":
+            await self.clone_bot(query, True)
+        elif data == "admin_restart":
+            await query.edit_message_text("🔄 Yeniden başlatılıyor...")
+            self.stop()
+            time.sleep(2)
+            self.start()
+        elif data == "admin_stop":
+            await query.edit_message_text("🛑 Durduruluyor...")
+            self.stop()
+        elif data == "admin_system":
+            await self.show_system(query)
+
+    # ============ ADMIN PANELİ ============
+    async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if not self.is_admin(user_id):
             await update.message.reply_text("⛔ Yetkiniz yok!")
             return
         
         keyboard = [
-            [InlineKeyboardButton("📊 İstatistik", callback_data="stats")],
-            [InlineKeyboardButton("👥 Kullanıcılar", callback_data="users")],
-            [InlineKeyboardButton("🚫 Ban", callback_data="ban")],
-            [InlineKeyboardButton("📢 Duyuru", callback_data="announce")],
-            [InlineKeyboardButton("🤖 Klonla", callback_data="clone")],
-            [InlineKeyboardButton("🔄 Yeniden Başlat", callback_data="restart")],
-            [InlineKeyboardButton("🛑 Durdur", callback_data="stop")],
-            [InlineKeyboardButton("📈 Sistem", callback_data="system")]
+            [InlineKeyboardButton("📊 İstatistikler", callback_data="admin_stats")],
+            [InlineKeyboardButton("👥 Kullanıcılar", callback_data="admin_users")],
+            [InlineKeyboardButton("🚫 Banlılar", callback_data="admin_bans")],
+            [InlineKeyboardButton("📢 Duyuru Gönder", callback_data="admin_announce")],
+            [InlineKeyboardButton("🤖 Bot Klonla", callback_data="admin_clone")],
+            [InlineKeyboardButton("🔄 Bot Yeniden Başlat", callback_data="admin_restart")],
+            [InlineKeyboardButton("🛑 Bot Durdur", callback_data="admin_stop")],
+            [InlineKeyboardButton("📈 Sistem Durumu", callback_data="admin_system")],
+            [InlineKeyboardButton("🔙 Ana Menü", callback_data="ana_menü")]
         ]
+        
         await update.message.reply_text(
             "🔧 **Admin Paneli**",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
 
-    async def stats_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if self.is_admin(user_id):
-            import psutil
-            cpu = psutil.cpu_percent()
-            ram = psutil.virtual_memory()
-            text = f"""
-📊 **SİSTEM İSTATİSTİKLERİ**
-
-• Çalışma: {self.get_uptime()}
-• Toplam sorgu: {self.get_total_queries()}
-• Bugünkü sorgu: {self.get_today_queries()}
-• Kullanıcı: {self.get_user_count()}
-• Banlı: {self.get_banned_count()}
-• Admin: {self.get_admin_count()}
-• CPU: {cpu}%
-• RAM: {ram.percent}%
-"""
-        else:
-            stats = self.get_user_stats(user_id)
-            text = f"""
-📊 **KİŞİSEL İSTATİSTİKLER**
-
-• Toplam sorgu: {stats['total']}
-• Bugünkü sorgu: {stats['today']}
-• Durum: {'✅ Aktif' if not self.is_banned(user_id) else '❌ Banlı'}
-"""
-        await update.message.reply_text(text, parse_mode='Markdown')
-
-    async def ban_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("⛔ Yetkiniz yok!")
-            return
-        if not context.args:
-            await update.message.reply_text("❌ Kullanım: /ban USER_ID SEBEP")
-            return
-        try:
-            target_id = int(context.args[0])
-            reason = ' '.join(context.args[1:]) if len(context.args) > 1 else 'Kural ihlali'
-            if self.ban_user(target_id, reason):
-                await update.message.reply_text(f"✅ Kullanıcı {target_id} banlandı!\nSebep: {reason}")
-            else:
-                await update.message.reply_text("❌ Ban başarısız!")
-        except:
-            await update.message.reply_text("❌ Geçersiz ID!")
-
-    async def unban_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("⛔ Yetkiniz yok!")
-            return
-        if not context.args:
-            await update.message.reply_text("❌ Kullanım: /unban USER_ID")
-            return
-        try:
-            target_id = int(context.args[0])
-            if self.unban_user(target_id):
-                await update.message.reply_text(f"✅ Kullanıcı {target_id} banı kaldırıldı!")
-            else:
-                await update.message.reply_text("❌ Unban başarısız!")
-        except:
-            await update.message.reply_text("❌ Geçersiz ID!")
-
-    async def announce_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("⛔ Yetkiniz yok!")
-            return
-        if not context.args:
-            await update.message.reply_text("❌ Kullanım: /duyuru MESAJ")
-            return
-        message = ' '.join(context.args)
-        users = self.get_all_users()
-        sent = 0
-        for user_id in users:
-            try:
-                await context.bot.send_message(
-                    user_id,
-                    f"📢 **DUYURU**\n\n{message}",
-                    parse_mode='Markdown'
-                )
-                sent += 1
-                time.sleep(0.1)
-            except:
-                continue
-        await update.message.reply_text(f"✅ Duyuru {sent} kullanıcıya gönderildi!")
-
-    async def clone_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("⛔ Yetkiniz yok!")
-            return
-        await self.clone_bot(update)
-
-    async def restart_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id != OWNER_ID:
-            await update.message.reply_text("⛔ Sadece bot sahibi!")
-            return
-        await update.message.reply_text("🔄 Yeniden başlatılıyor...")
-        self.stop()
-        time.sleep(2)
-        self.start()
-
-    async def stop_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_user.id != OWNER_ID:
-            await update.message.reply_text("⛔ Sadece bot sahibi!")
-            return
-        await update.message.reply_text("🛑 Durduruluyor...")
-        self.stop()
-
     # ============ MESAJ İŞLEME ============
     async def message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
         
+        # Ban kontrolü
         if self.is_banned(user_id):
             await update.message.reply_text("❌ Banlısınız!")
             return
         
+        # Kanal kontrolü
         if not await self.check_channels(update, context):
             return
         
-        # Yasaklı kelime kontrolü
-        for word in BANNED_WORDS:
-            if word.lower() in text.lower():
-                self.ban_user(user_id, f"Yasaklı kelime: {word}")
-                await update.message.reply_text("⚠️ Yasaklı kelime kullanımı nedeniyle banlandınız!")
+        # Kullanıcı durumu kontrolü
+        if user_id in self.user_states:
+            state = self.user_states[user_id]
+            
+            if state.startswith("bekle_"):
+                sorgu_tipi = state.replace("bekle_", "")
+                await self.process_query(update, sorgu_tipi, text)
+                del self.user_states[user_id]
                 return
+            
+            elif state == "bekle_duyuru":
+                if self.is_admin(user_id):
+                    await self.send_announcement(update, text)
+                del self.user_states[user_id]
+                return
+        
+        # Normal mesaj - Ana menüye yönlendir
+        await self.start_cmd(update, context)
+
+    # ============ SORGU İŞLEME ============
+    async def process_query(self, update: Update, q_type: str, q_param: str):
+        user_id = update.effective_user.id
         
         # Rate limit
         if user_id in self.rate_limits:
@@ -324,61 +361,53 @@ Merhaba {user.first_name}!
             await update.message.reply_text("⚠️ Günlük sorgu limitine ulaştınız! (50)")
             return
         
-        await self.process_query(update, text)
-
-    async def process_query(self, update: Update, text: str):
-        parts = text.split(' ', 1)
-        if len(parts) < 2:
-            await update.message.reply_text("❌ Format: `tip parametre`\nÖrnek: `tc 12345678901`")
-            return
-        
-        q_type, q_param = parts[0].lower(), parts[1].strip()
-        
-        # API seçimi
-        if q_type == "tc":
+        # Parametre doğrulama
+        if q_type == "tc" or q_type == "adres" or q_type == "tcgsm" or q_type == "isyeri" or q_type == "sulale":
             if not self.validate_tc(q_param):
-                await update.message.reply_text("❌ Geçersiz TC!")
+                await update.message.reply_text("❌ Geçersiz TC kimlik numarası!")
                 return
+        elif q_type == "gsmtc":
+            if not self.validate_gsm(q_param):
+                await update.message.reply_text("❌ Geçersiz GSM numarası!")
+                return
+        
+        # API URL oluştur
+        if q_type == "tc":
             url = APIS["tc"].format(q_param)
         elif q_type == "adsoyad":
             params = q_param.split(' ')
             if len(params) < 4:
-                await update.message.reply_text("❌ Format: `adsoyad AD SOYAD İL İLÇE`")
+                await update.message.reply_text("❌ Format: Ad Soyad İl İlçe")
                 return
             url = APIS["adsoyad"].format(params[0], params[1], params[2], ' '.join(params[3:]))
         elif q_type == "adres":
-            if not self.validate_tc(q_param):
-                await update.message.reply_text("❌ Geçersiz TC!")
-                return
             url = APIS["adres"].format(q_param)
         elif q_type == "gsmtc":
             url = APIS["gsmtc"].format(q_param)
         elif q_type == "tcgsm":
-            if not self.validate_tc(q_param):
-                await update.message.reply_text("❌ Geçersiz TC!")
-                return
             url = APIS["tcgsm"].format(q_param)
         elif q_type == "isyeri":
-            if not self.validate_tc(q_param):
-                await update.message.reply_text("❌ Geçersiz TC!")
-                return
             url = APIS["isyeri"].format(q_param)
         elif q_type == "sulale":
-            if not self.validate_tc(q_param):
-                await update.message.reply_text("❌ Geçersiz TC!")
-                return
             url = APIS["sulale"].format(q_param)
         else:
-            await update.message.reply_text("❌ Desteklenen: tc, adsoyad, adres, gsmtc, tcgsm, isyeri, sulale")
+            await update.message.reply_text("❌ Geçersiz sorgu tipi!")
             return
         
         try:
             await update.message.reply_text("⏳ Sorgulanıyor...")
-            response = requests.get(url, timeout=10)
+            
+            # Cloudflare korumasını geç
+            response = scraper.get(url, timeout=30)
             data = response.text
             
+            # HTML kontrolü - Cloudflare sayfası mı?
+            if "Just a moment..." in data or "cloudflare" in data.lower():
+                await update.message.reply_text("⚠️ Cloudflare koruması aşılamıyor! Lütfen daha sonra tekrar deneyin.")
+                return
+            
             # Dosya oluştur
-            filename = f"query_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            filename = f"sorgu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             formatted = f"""
 ==========================================
 🔍 SORGULAMA SONUCU
@@ -400,68 +429,61 @@ Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             with open(filename, 'rb') as f:
                 await update.message.reply_document(f, filename=filename)
             
-            self.save_query(update.effective_user.id, q_type, q_param)
+            self.save_query(user_id, q_type, q_param)
             os.remove(filename)
             
+            # Ana menü butonu
+            keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="ana_menü")]]
+            await update.message.reply_text(
+                "✅ Sorgu tamamlandı!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
         except Exception as e:
+            logger.error(f"Sorgu hatası: {e}")
             await update.message.reply_text(f"❌ Hata: {str(e)}")
 
-    # ============ CALLBACK ============
-    async def callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        user_id = query.from_user.id
-        
-        if not self.is_admin(user_id):
-            await query.edit_message_text("⛔ Yetkiniz yok!")
-            return
-        
-        data = query.data
-        if data == "stats":
-            await self.stats_cmd(update, context)
-        elif data == "users":
-            users = self.get_users_list()
-            if not users:
-                await query.edit_message_text("📭 Kullanıcı yok")
-                return
-            text = "👥 **KULLANICILAR**\n\n"
-            for i, u in enumerate(users[:20], 1):
-                text += f"{i}. ID: `{u[0]}` | @{u[1] or 'yok'} | Sorgu: {u[2]}\n"
-            await query.edit_message_text(text, parse_mode='Markdown')
-        elif data == "ban":
-            await query.edit_message_text("🚫 **BAN YÖNETİMİ**\n\n/ban USER_ID SEBEP\n/unban USER_ID", parse_mode='Markdown')
-        elif data == "announce":
-            await query.edit_message_text("📢 **DUYURU**\n\n/duyuru MESAJ", parse_mode='Markdown')
-        elif data == "clone":
-            await self.clone_bot(query, True)
-        elif data == "restart":
-            await query.edit_message_text("🔄 Yeniden başlatılıyor...")
-            self.stop()
-            time.sleep(2)
-            self.start()
-            await query.edit_message_text("✅ Yeniden başlatıldı!")
-        elif data == "stop":
-            await query.edit_message_text("🛑 Durduruluyor...")
-            self.stop()
-        elif data == "system":
-            try:
-                import psutil
-                cpu = psutil.cpu_percent()
-                ram = psutil.virtual_memory()
-                text = f"""
-📈 **SİSTEM DURUMU**
-
-CPU: {cpu}%
-RAM: {ram.percent}%
-RAM Kullanım: {ram.used / (1024**3):.2f} GB
-RAM Toplam: {ram.total / (1024**3):.2f} GB
-Çalışma: {self.get_uptime()}
-"""
-                await query.edit_message_text(text, parse_mode='Markdown')
-            except:
-                await query.edit_message_text("❌ Sistem bilgisi alınamadı")
-
     # ============ YARDIMCI FONKSİYONLAR ============
+    def validate_tc(self, tc):
+        if not tc.isdigit() or len(tc) != 11:
+            return False
+        return True
+
+    def validate_gsm(self, gsm):
+        gsm = re.sub(r'\D', '', gsm)
+        return len(gsm) >= 10 and len(gsm) <= 11
+
+    async def check_channels(self, update, context):
+        try:
+            user_id = update.effective_user.id
+            for channel in REQUIRED_CHANNELS:
+                try:
+                    member = await context.bot.get_chat_member(channel, user_id)
+                    if member.status not in ['member', 'administrator', 'creator']:
+                        await update.message.reply_text(f"❌ {channel} kanalına katılın!")
+                        return False
+                except:
+                    continue
+            return True
+        except:
+            return True
+
+    async def check_channels_callback(self, update, context):
+        try:
+            user_id = update.effective_user.id
+            for channel in REQUIRED_CHANNELS:
+                try:
+                    member = await context.bot.get_chat_member(channel, user_id)
+                    if member.status not in ['member', 'administrator', 'creator']:
+                        await update.edit_message_text(f"❌ {channel} kanalına katılın!")
+                        return False
+                except:
+                    continue
+            return True
+        except:
+            return True
+
+    # Diğer yardımcı fonksiyonlar (kaydetme, banlama, istatistikler vb.)
     def register_user(self, user):
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -532,59 +554,6 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
             conn.close()
         except:
             pass
-
-    def validate_tc(self, tc):
-        if not tc.isdigit() or len(tc) != 11:
-            return False
-        return True
-
-    async def check_channels(self, update, context):
-        try:
-            user_id = update.effective_user.id
-            for channel in REQUIRED_CHANNELS:
-                try:
-                    member = await context.bot.get_chat_member(channel, user_id)
-                    if member.status not in ['member', 'administrator', 'creator']:
-                        await update.message.reply_text(f"❌ {channel} kanalına katılın!")
-                        return False
-                except:
-                    continue
-            return True
-        except:
-            return True
-
-    async def clone_bot(self, update, is_callback=False):
-        try:
-            with open(__file__, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            content = re.sub(r'BOT_TOKEN = ".*?"', 'BOT_TOKEN = "YOUR_TOKEN_HERE"', content)
-            content = re.sub(r'OWNER_ID = \d+', 'OWNER_ID = 0', content)
-            
-            filename = f"cloned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(content)
-            
-            msg = f"✅ **Klonlandı!**\nDosya: {filename}"
-            
-            if is_callback:
-                await update.edit_message_text(msg, parse_mode='Markdown')
-            else:
-                await update.message.reply_text(msg, parse_mode='Markdown')
-            
-            with open(filename, 'rb') as f:
-                if is_callback:
-                    await update.message.reply_document(f)
-                else:
-                    await update.message.reply_document(f)
-            
-            os.remove(filename)
-        except Exception as e:
-            error = f"❌ Hata: {str(e)}"
-            if is_callback:
-                await update.edit_message_text(error)
-            else:
-                await update.message.reply_text(error)
 
     # ============ VERİTABANI SORGULARI ============
     def get_user_count(self):
@@ -680,6 +649,17 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
         except:
             return []
 
+    def get_bans_list(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT user_id, reason, ban_date FROM bans ORDER BY ban_date DESC LIMIT 20")
+            bans = c.fetchall()
+            conn.close()
+            return bans
+        except:
+            return []
+
     def get_all_users(self):
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -698,6 +678,213 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
         hours = delta.seconds // 3600
         minutes = (delta.seconds % 3600) // 60
         return f"{delta.days}g {hours}s {minutes}d"
+
+    # ============ ADMIN İŞLEMLERİ ============
+    async def show_users(self, query):
+        users = self.get_users_list()
+        if not users:
+            await query.edit_message_text("📭 Kullanıcı yok")
+            return
+        text = "👥 **KULLANICILAR**\n\n"
+        for i, u in enumerate(users[:20], 1):
+            text += f"{i}. ID: `{u[0]}` | @{u[1] or 'yok'} | Sorgu: {u[2]}\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    async def show_bans(self, query):
+        bans = self.get_bans_list()
+        if not bans:
+            await query.edit_message_text("📭 Banlı kullanıcı yok")
+            return
+        text = "🚫 **BANLI KULLANICILAR**\n\n"
+        for i, b in enumerate(bans[:20], 1):
+            text += f"{i}. ID: `{b[0]}` | Sebep: {b[1]} | Tarih: {b[2]}\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    async def show_system(self, query):
+        try:
+            import psutil
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            text = f"""
+📈 **SİSTEM DURUMU**
+
+CPU: {cpu}%
+RAM: {ram.percent}% ({ram.used / (1024**3):.2f} GB / {ram.total / (1024**3):.2f} GB)
+Disk: {disk.percent}% ({disk.used / (1024**3):.2f} GB / {disk.total / (1024**3):.2f} GB)
+Çalışma: {self.get_uptime()}
+"""
+            keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        except:
+            await query.edit_message_text("❌ Sistem bilgisi alınamadı")
+
+    async def send_announcement(self, update, message):
+        users = self.get_all_users()
+        sent = 0
+        for user_id in users:
+            try:
+                await update.message.reply_text(
+                    f"📢 **DUYURU**\n\n{message}",
+                    parse_mode='Markdown'
+                )
+                sent += 1
+                time.sleep(0.05)
+            except:
+                continue
+        await update.message.reply_text(f"✅ Duyuru {sent} kullanıcıya gönderildi!")
+
+    async def clone_bot(self, update, is_callback=False):
+        try:
+            with open(__file__, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            content = re.sub(r'BOT_TOKEN = ".*?"', 'BOT_TOKEN = "YOUR_TOKEN_HERE"', content)
+            content = re.sub(r'OWNER_ID = \d+', 'OWNER_ID = 0', content)
+            
+            filename = f"cloned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            msg = f"✅ **Klonlandı!**\nDosya: {filename}"
+            
+            if is_callback:
+                await update.edit_message_text(msg, parse_mode='Markdown')
+            else:
+                await update.message.reply_text(msg, parse_mode='Markdown')
+            
+            with open(filename, 'rb') as f:
+                if is_callback:
+                    await update.message.reply_document(f)
+                else:
+                    await update.message.reply_document(f)
+            
+            os.remove(filename)
+        except Exception as e:
+            error = f"❌ Hata: {str(e)}"
+            if is_callback:
+                await update.edit_message_text(error)
+            else:
+                await update.message.reply_text(error)
+
+    # ============ İSTATİSTİK ============
+    async def stats_cmd(self, update, context):
+        user_id = update.effective_user.id
+        if self.is_admin(user_id):
+            try:
+                import psutil
+                cpu = psutil.cpu_percent()
+                ram = psutil.virtual_memory()
+                text = f"""
+📊 **SİSTEM İSTATİSTİKLERİ**
+
+• Çalışma: {self.get_uptime()}
+• Toplam sorgu: {self.get_total_queries()}
+• Bugünkü sorgu: {self.get_today_queries()}
+• Kullanıcı: {self.get_user_count()}
+• Banlı: {self.get_banned_count()}
+• Admin: {self.get_admin_count()}
+• CPU: {cpu}%
+• RAM: {ram.percent}%
+"""
+            except:
+                text = "⚠️ Sistem bilgisi alınamadı"
+        else:
+            stats = self.get_user_stats(user_id)
+            text = f"""
+📊 **KİŞİSEL İSTATİSTİKLER**
+
+• Toplam sorgu: {stats['total']}
+• Bugünkü sorgu: {stats['today']}
+• Durum: {'✅ Aktif' if not self.is_banned(user_id) else '❌ Banlı'}
+"""
+        
+        keyboard = [[InlineKeyboardButton("🔙 Ana Menü", callback_data="ana_menü")]]
+        if isinstance(update, Update):
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        else:
+            await update.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    # ============ BAN KOMUTLARI ============
+    async def ban_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("⛔ Yetkiniz yok!")
+            return
+        if not context.args:
+            await update.message.reply_text("❌ Kullanım: /ban USER_ID SEBEP")
+            return
+        try:
+            target_id = int(context.args[0])
+            reason = ' '.join(context.args[1:]) if len(context.args) > 1 else 'Kural ihlali'
+            if self.ban_user(target_id, reason):
+                await update.message.reply_text(f"✅ Kullanıcı {target_id} banlandı!\nSebep: {reason}")
+            else:
+                await update.message.reply_text("❌ Ban başarısız!")
+        except:
+            await update.message.reply_text("❌ Geçersiz ID!")
+
+    async def unban_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("⛔ Yetkiniz yok!")
+            return
+        if not context.args:
+            await update.message.reply_text("❌ Kullanım: /unban USER_ID")
+            return
+        try:
+            target_id = int(context.args[0])
+            if self.unban_user(target_id):
+                await update.message.reply_text(f"✅ Kullanıcı {target_id} banı kaldırıldı!")
+            else:
+                await update.message.reply_text("❌ Unban başarısız!")
+        except:
+            await update.message.reply_text("❌ Geçersiz ID!")
+
+    async def announce_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("⛔ Yetkiniz yok!")
+            return
+        if not context.args:
+            await update.message.reply_text("❌ Kullanım: /duyuru MESAJ")
+            return
+        message = ' '.join(context.args)
+        await self.send_announcement(update, message)
+
+    async def clone_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("⛔ Yetkiniz yok!")
+            return
+        await self.clone_bot(update)
+
+    async def restart_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id != OWNER_ID:
+            await update.message.reply_text("⛔ Sadece bot sahibi!")
+            return
+        await update.message.reply_text("🔄 Yeniden başlatılıyor...")
+        self.stop()
+        time.sleep(2)
+        self.start()
+
+    async def stop_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id != OWNER_ID:
+            await update.message.reply_text("⛔ Sadece bot sahibi!")
+            return
+        await update.message.reply_text("🛑 Durduruluyor...")
+        self.stop()
+
+    # ============ DURDURMA ============
+    def stop(self):
+        if self.application and self.running:
+            try:
+                self.application.stop()
+            except:
+                pass
+            self.running = False
+            logger.info("🛑 Bot durduruldu")
 
 # ============ ANA ÇALIŞTIRMA ============
 def main():
