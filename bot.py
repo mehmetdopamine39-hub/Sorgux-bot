@@ -1,4 +1,4 @@
-# bot.py - Render'da Cloudflare Bypass + Proxy Destekli
+# bot.py - Webhook ile Render Uyumlu, Cloudflare Bypass
 import os
 import re
 import sys
@@ -10,7 +10,6 @@ import subprocess
 import random
 from datetime import datetime
 from typing import Dict, List, Tuple
-from urllib.parse import urlparse
 
 # Gerekli kütüphaneler
 try:
@@ -27,12 +26,12 @@ except ImportError:
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
 
-# Telegram
+# Telegram - Webhook desteği ile
 try:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot[webhooks]==20.7"])
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -41,6 +40,11 @@ BOT_TOKEN = "8853911485:AAEtjm2Y7640cMVlAIuYfM63JyKuyr4Lqck"
 OWNER_ID = 8610336203
 DB_PATH = "bot_data.db"
 REQUIRED_CHANNELS = ["@iosstarturkiyee", "@rinexsorgux", "@izinsizleriz"]
+
+# Render ortam değişkenleri
+PORT = int(os.environ.get("PORT", 10000))
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://sorgux-bot.onrender.com")
+WEBHOOK_PATH = "/webhook"
 
 # API'ler
 APIS = {
@@ -68,13 +72,10 @@ class CloudflareBypass:
         self.ua = UserAgent()
         self.session = self._create_session()
         self.proxies = self._get_proxies()
-        self.last_response = None
         
     def _create_session(self):
-        """Güçlü session oluştur"""
         session = requests.Session()
         
-        # Retry mekanizması
         retry = Retry(
             total=5,
             read=5,
@@ -84,16 +85,10 @@ class CloudflareBypass:
             allowed_methods=["GET", "POST"]
         )
         
-        adapter = HTTPAdapter(
-            max_retries=retry,
-            pool_connections=20,
-            pool_maxsize=20
-        )
-        
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
         session.mount('http://', adapter)
         session.mount('https://', adapter)
         
-        # Headers
         session.headers.update({
             'User-Agent': self.ua.random,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -102,10 +97,6 @@ class CloudflareBypass:
             'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
         })
@@ -113,11 +104,8 @@ class CloudflareBypass:
         return session
     
     def _get_proxies(self):
-        """Proxy listesi oluştur"""
         proxies = []
-        
-        # HTTP proxy'ler (ücretsiz)
-        http_proxies = [
+        proxy_list = [
             "http://103.167.73.68:8080",
             "http://103.167.91.178:8080",
             "http://103.152.113.86:80",
@@ -125,168 +113,54 @@ class CloudflareBypass:
             "http://103.137.93.84:80",
         ]
         
-        # HTTPS proxy'ler
-        https_proxies = [
-            "https://103.167.73.68:8080",
-            "https://103.167.91.178:8080",
-            "https://103.152.113.86:80",
-        ]
-        
-        for p in http_proxies + https_proxies:
-            proxies.append({
-                'http': p,
-                'https': p.replace('http://', 'https://') if p.startswith('http://') else p
-            })
+        for p in proxy_list:
+            proxies.append({'http': p, 'https': p.replace('http://', 'https://') if p.startswith('http://') else p})
         
         return proxies
     
     def _get_random_headers(self):
-        """Rastgele headers oluştur"""
         return {
             'User-Agent': self.ua.random,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': random.choice(['tr-TR,tr;q=0.9,en;q=0.8', 'en-US,en;q=0.9', 'de-DE,de;q=0.9']),
+            'Accept-Language': random.choice(['tr-TR,tr;q=0.9,en;q=0.8', 'en-US,en;q=0.9']),
             'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': random.choice([
-                'https://www.google.com/',
-                'https://www.bing.com/',
-                'https://www.yandex.com/',
-                'https://duckduckgo.com/'
-            ]),
+            'Referer': random.choice(['https://www.google.com/', 'https://www.bing.com/', 'https://www.yandex.com/']),
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
         }
     
-    def get(self, url, timeout=45, retry_count=3):
-        """Cloudflare korumalı siteye istek at - Çok katmanlı bypass"""
-        
-        # 1. Cloudscraper ile dene
+    def get(self, url, timeout=45):
+        # 1. Cloudscraper
         try:
-            logger.info(f"📡 Cloudscraper ile deneniyor: {url}")
             scraper = cloudscraper.create_scraper(
-                browser={
-                    'browser': 'chrome',
-                    'platform': 'windows',
-                    'mobile': False,
-                    'desktop': True
-                },
+                browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False, 'desktop': True},
                 interpreter='nodejs',
                 delay=2
             )
-            
             scraper.headers.update(self._get_random_headers())
             response = scraper.get(url, timeout=timeout)
-            
             if response.status_code == 200 and "Just a moment..." not in response.text:
-                logger.info("✅ Cloudscraper başarılı!")
                 return response.text
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Cloudscraper hatası: {e}")
-        
-        # 2. Requests + Proxy ile dene
-        for attempt in range(retry_count):
-            try:
-                # Proxy seç
-                proxy = random.choice(self.proxies) if self.proxies else None
-                
-                logger.info(f"📡 Proxy ile deneniyor (deneme {attempt+1}): {url}")
-                
-                headers = self._get_random_headers()
-                
-                # Session yenile
-                session = self._create_session()
-                session.headers.update(headers)
-                
-                if proxy:
-                    session.proxies.update(proxy)
-                
-                response = session.get(url, timeout=timeout)
-                
-                if response.status_code == 200 and "Just a moment..." not in response.text:
-                    logger.info("✅ Proxy ile başarılı!")
-                    return response.text
-                    
-                time.sleep(1 + random.random() * 2)
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Proxy hatası (deneme {attempt+1}): {e}")
-                time.sleep(2 + random.random() * 3)
-        
-        # 3. Farklı User-Agent ve Cookie ile dene
-        try:
-            logger.info("📡 Alternatif User-Agent ile deneniyor...")
-            
-            session = requests.Session()
-            
-            # Cookie jar oluştur
-            session.cookies.set('cf_clearance', 'dummy', domain='.arastir.vip')
-            session.cookies.set('__cfduid', 'dummy', domain='.arastir.vip')
-            
-            headers = self._get_random_headers()
-            headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            
-            session.headers.update(headers)
-            response = session.get(url, timeout=timeout)
-            
-            if response.status_code == 200 and "Just a moment..." not in response.text:
-                logger.info("✅ Alternatif User-Agent ile başarılı!")
-                return response.text
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Alternatif User-Agent hatası: {e}")
-        
-        # 4. Cloudflare challenge simülasyonu
-        try:
-            logger.info("📡 Cloudflare challenge simülasyonu deneniyor...")
-            
-            # Selenium alternatifi - JS çalıştırabilen bir yöntem
-            import subprocess
-            import tempfile
-            
-            js_code = """
-            const puppeteer = require('puppeteer');
-            
-            (async () => {
-                const browser = await puppeteer.launch({
-                    headless: 'new',
-                    args: ['--no-sandbox', '--disable-setuid-sandbox']
-                });
-                const page = await browser.newPage();
-                await page.goto('""" + url + """', { waitUntil: 'networkidle2' });
-                const content = await page.content();
-                console.log(content);
-                await browser.close();
-            })();
-            """
-            
-            # Puppeteer ile dene
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as f:
-                f.write(js_code)
-                js_file = f.name
-            
-            try:
-                result = subprocess.run(['node', js_file], capture_output=True, text=True, timeout=30)
-                if result.stdout and "Just a moment..." not in result.stdout:
-                    logger.info("✅ Puppeteer ile başarılı!")
-                    return result.stdout
-            except:
-                pass
-            finally:
-                os.unlink(js_file)
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Challenge simülasyon hatası: {e}")
-        
-        # Hepsi başarısız
-        return "CLOUDFLARE_BLOCKED"
-    
-    def close(self):
-        """Session'ı kapat"""
-        try:
-            self.session.close()
         except:
             pass
+        
+        # 2. Proxy ile
+        for attempt in range(3):
+            try:
+                proxy = random.choice(self.proxies) if self.proxies else None
+                headers = self._get_random_headers()
+                session = self._create_session()
+                session.headers.update(headers)
+                if proxy:
+                    session.proxies.update(proxy)
+                response = session.get(url, timeout=timeout)
+                if response.status_code == 200 and "Just a moment..." not in response.text:
+                    return response.text
+                time.sleep(1 + random.random() * 2)
+            except:
+                pass
+        
+        return "CLOUDFLARE_BLOCKED"
 
 # ============ VERİTABANI ============
 def init_db():
@@ -352,10 +226,17 @@ class BotSystem:
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
             
             self.running = True
-            logger.info("📡 Polling başlatılıyor...")
-            self.application.run_polling(
-                drop_pending_updates=True,
-                stop_signals=None
+            
+            # Webhook ile başlat - Conflict hatasını çözer
+            webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+            logger.info(f"🌐 Webhook kuruluyor: {webhook_url}")
+            
+            self.application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path=WEBHOOK_PATH.lstrip('/'),
+                webhook_url=webhook_url,
+                drop_pending_updates=True
             )
             
         except Exception as e:
@@ -370,7 +251,6 @@ class BotSystem:
             except:
                 pass
             self.running = False
-            self.cf.close()
             logger.info("🛑 Bot durduruldu")
 
     # ============ KOMUTLAR ============
@@ -731,20 +611,14 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
             return
         
         try:
-            await update.message.reply_text("⏳ Sorgulanıyor... (Cloudflare bypass aktif - çok katmanlı)")
+            await update.message.reply_text("⏳ Sorgulanıyor... (Cloudflare bypass aktif)")
             
-            # Cloudflare bypass ile istek
             data = self.cf.get(url, timeout=45)
             
             if data == "CLOUDFLARE_BLOCKED":
-                await update.message.reply_text("⚠️ Cloudflare koruması aşılamadı! Proxy ve farklı yöntemler deneniyor...")
-                # Tekrar dene - farklı yaklaşım
-                data = self.cf.get(url, timeout=60)
-                if data == "CLOUDFLARE_BLOCKED":
-                    await update.message.reply_text("❌ Cloudflare koruması aşılamadı! Lütfen daha sonra tekrar deneyin.")
-                    return
+                await update.message.reply_text("⚠️ Cloudflare koruması aşılamadı! Lütfen daha sonra tekrar deneyin.")
+                return
             
-            # Sonuç dosyası oluştur
             filename = f"sorgu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             formatted = f"""
 ==========================================
@@ -753,7 +627,6 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
 Tip: {q_type.upper()}
 Parametre: {q_param}
 Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Bypass: Cloudflare Multi-Layer
 ==========================================
 
 {data}
