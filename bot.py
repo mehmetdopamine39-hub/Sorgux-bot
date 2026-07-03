@@ -1,4 +1,4 @@
-# bot.py - Cloudflare Bypass + Gerçek Tarayıcı Emülasyonu
+# bot.py - Webhook ile Render Uyumlu, Cloudflare Bypass
 import os
 import re
 import sys
@@ -11,22 +11,12 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 from fake_useragent import UserAgent
 
-# Cloudflare bypass için güçlü kütüphaneler
+# Cloudflare bypass
 try:
     import cloudscraper
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "cloudscraper", "fake-useragent", "selenium"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "cloudscraper"])
     import cloudscraper
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
 
 # Telegram
 try:
@@ -42,6 +32,8 @@ BOT_TOKEN = "8853911485:AAEtjm2Y7640cMVlAIuYfM63JyKuyr4Lqck"
 OWNER_ID = 8610336203
 DB_PATH = "bot_data.db"
 REQUIRED_CHANNELS = ["@iosstarturkiyee", "@rinexsorgux", "@izinsizleriz"]
+PORT = int(os.environ.get("PORT", 10000))
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL", f"https://sorgu-botu.onrender.com")
 
 # API'ler
 APIS = {
@@ -56,129 +48,21 @@ APIS = {
 
 BANNED_WORDS = ["#404", "#banned", "#kurucu", "#team", "#telegram"]
 
+# Cloudflare scraper
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'mobile': False
+    }
+)
+
 # Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# ============ GELİŞMİŞ CLOUDFLARE BYPASS ============
-class CloudflareBypass:
-    def __init__(self):
-        self.ua = UserAgent()
-        self.session = self._create_session()
-        self.driver = None
-        
-    def _create_session(self):
-        """Gelişmiş session oluştur"""
-        session = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'mobile': False,
-                'desktop': True
-            },
-            interpreter='nodejs',  # JavaScript yorumlayıcı
-            delay=2
-        )
-        
-        # Gerçek tarayıcı header'ları
-        session.headers.update({
-            'User-Agent': self.ua.random,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
-        })
-        
-        return session
-    
-    def _create_driver(self):
-        """Selenium driver oluştur"""
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--user-agent=' + self.ua.random)
-        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
-        
-        try:
-            driver = webdriver.Chrome(options=chrome_options)
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            return driver
-        except:
-            return None
-    
-    def get(self, url, timeout=30):
-        """Cloudflare korumalı siteye istek at"""
-        try:
-            # Önce cloudscraper ile dene
-            logger.info(f"📡 Cloudscraper ile deneniyor: {url}")
-            response = self.session.get(url, timeout=timeout)
-            
-            # Cloudflare kontrolü
-            if "Just a moment..." in response.text or "cf_chl" in response.text:
-                logger.warning("⚠️ Cloudflare koruması tespit edildi, Selenium deneniyor...")
-                return self._selenium_get(url, timeout)
-            
-            return response.text
-            
-        except Exception as e:
-            logger.error(f"❌ Cloudscraper hatası: {e}")
-            return self._selenium_get(url, timeout)
-    
-    def _selenium_get(self, url, timeout):
-        """Selenium ile Cloudflare bypass"""
-        try:
-            if not self.driver:
-                self.driver = self._create_driver()
-                if not self.driver:
-                    return "Selenium başlatılamadı!"
-            
-            logger.info(f"🌐 Selenium ile deneniyor: {url}")
-            self.driver.get(url)
-            
-            # Sayfanın yüklenmesini bekle
-            wait = WebDriverWait(self.driver, timeout)
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            
-            # Cloudflare challenge geçene kadar bekle
-            time.sleep(5)
-            
-            # Sayfa kaynağını al
-            html = self.driver.page_source
-            
-            # Eğer hala Cloudflare varsa, challenge'i bekle
-            if "Just a moment..." in html or "cf_chl" in html:
-                logger.info("⏳ Cloudflare challenge bekleniyor...")
-                time.sleep(10)
-                html = self.driver.page_source
-            
-            return html
-            
-        except Exception as e:
-            logger.error(f"❌ Selenium hatası: {e}")
-            return f"Selenium hatası: {str(e)}"
-    
-    def close(self):
-        """Driver'ı kapat"""
-        if self.driver:
-            try:
-                self.driver.quit()
-            except:
-                pass
 
 # ============ VERİTABANI ============
 def init_db():
@@ -221,8 +105,6 @@ class BotSystem:
         self.start_time = datetime.now()
         self.rate_limits = {}
         self.user_states = {}
-        self.cf = CloudflareBypass()
-        self.query_cache = {}
 
     def start(self):
         try:
@@ -245,8 +127,15 @@ class BotSystem:
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
             
             self.running = True
-            logger.info("✅ Bot çalışıyor...")
-            self.application.run_polling()
+            
+            # Webhook kullan - Conflict hatasını çözer
+            logger.info(f"🌐 Webhook kuruluyor: {WEBHOOK_URL}/webhook")
+            self.application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path="webhook",
+                webhook_url=f"{WEBHOOK_URL}/webhook"
+            )
             
         except Exception as e:
             logger.error(f"❌ Bot hatası: {e}")
@@ -260,7 +149,6 @@ class BotSystem:
             except:
                 pass
             self.running = False
-            self.cf.close()
             logger.info("🛑 Bot durduruldu")
 
     # ============ KOMUTLAR ============
@@ -630,12 +518,13 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
         try:
             await update.message.reply_text("⏳ Sorgulanıyor... (Cloudflare bypass aktif)")
             
-            # Cloudflare bypass ile istek
-            data = self.cf.get(url, timeout=45)
+            # Cloudflare bypass
+            response = scraper.get(url, timeout=30)
+            data = response.text
             
-            # Hata kontrolü
-            if "Selenium hatası" in data or "Cloudflare" in data:
-                await update.message.reply_text("⚠️ Cloudflare koruması aşılamadı! Lütfen daha sonra tekrar deneyin.")
+            # Cloudflare kontrolü
+            if "Just a moment..." in data or "cf_chl" in data:
+                await update.message.reply_text("⚠️ Cloudflare koruması aşılamıyor! Lütfen daha sonra tekrar deneyin.")
                 return
             
             # Dosya oluştur
@@ -647,7 +536,6 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
 Tip: {q_type.upper()}
 Parametre: {q_param}
 Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Bypass: Cloudflare
 ==========================================
 
 {data}
