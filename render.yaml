@@ -2,17 +2,9 @@ services:
   - type: web
     name: sorgu-botu
     runtime: python
-    buildCommand: |
-      pip install -r requirements.txt
-      apt-get update && apt-get install -y wget unzip
-      wget -q -O chromedriver.zip https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/120.0.6099.109/linux64/chromedriver-linux64.zip
-      unzip chromedriver.zip
-      mv chromedriver-linux64/chromedriver /usr/local/bin/
-      chmod +x /usr/local/bin/chromedriver
+    buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: CHROME_BIN
-        value: /usr/bin/google-chrome
     plan: free
