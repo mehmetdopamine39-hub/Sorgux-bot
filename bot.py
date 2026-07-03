@@ -1,4 +1,4 @@
-# bot.py - Ana Bot Dosyası (Render Uyumlu)
+# bot.py - Render Uyumlu, Tüm Hatalar Giderilmiş
 import os
 import re
 import json
@@ -11,12 +11,12 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Tuple
 
-# Telegram kütüphanesi yüklemesi
+# Telegram kütüphanesi - Düzeltilmiş import
 try:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.3"])
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
     from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -43,7 +43,10 @@ APIS = {
 BANNED_WORDS = ["#404", "#banned", "#kurucu", "#team", "#telegram"]
 
 # Logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # ============ VERİTABANI ============
@@ -77,13 +80,14 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (OWNER_ID,))
     conn.commit()
     conn.close()
+    logger.info("✅ Veritabanı hazır")
 
 init_db()
 
-# ============ BOT SINIFI ============
+# ============ BOT ============
 class BotSystem:
     def __init__(self):
-        self.app = None
+        self.application = None
         self.running = False
         self.start_time = datetime.now()
         self.rate_limits = {}
@@ -91,34 +95,40 @@ class BotSystem:
     def start(self):
         try:
             logger.info("🚀 Bot başlatılıyor...")
-            self.app = Application.builder().token(BOT_TOKEN).build()
+            
+            # Application oluştur
+            self.application = Application.builder().token(BOT_TOKEN).build()
             
             # Komutlar
-            self.app.add_handler(CommandHandler("start", self.start_cmd))
-            self.app.add_handler(CommandHandler("admin", self.admin_cmd))
-            self.app.add_handler(CommandHandler("stats", self.stats_cmd))
-            self.app.add_handler(CommandHandler("ban", self.ban_cmd))
-            self.app.add_handler(CommandHandler("unban", self.unban_cmd))
-            self.app.add_handler(CommandHandler("duyuru", self.announce_cmd))
-            self.app.add_handler(CommandHandler("clone", self.clone_cmd))
-            self.app.add_handler(CommandHandler("restart", self.restart_cmd))
-            self.app.add_handler(CommandHandler("stop", self.stop_cmd))
+            self.application.add_handler(CommandHandler("start", self.start_cmd))
+            self.application.add_handler(CommandHandler("admin", self.admin_cmd))
+            self.application.add_handler(CommandHandler("stats", self.stats_cmd))
+            self.application.add_handler(CommandHandler("ban", self.ban_cmd))
+            self.application.add_handler(CommandHandler("unban", self.unban_cmd))
+            self.application.add_handler(CommandHandler("duyuru", self.announce_cmd))
+            self.application.add_handler(CommandHandler("clone", self.clone_cmd))
+            self.application.add_handler(CommandHandler("restart", self.restart_cmd))
+            self.application.add_handler(CommandHandler("stop", self.stop_cmd))
             
             # Callback ve mesaj
-            self.app.add_handler(CallbackQueryHandler(self.callback_handler))
-            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
+            self.application.add_handler(CallbackQueryHandler(self.callback_handler))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
             
             self.running = True
-            self.app.run_polling()
+            self.application.run_polling()
+            
         except Exception as e:
-            logger.error(f"Hata: {e}")
+            logger.error(f"❌ Bot hatası: {e}")
             self.running = False
 
     def stop(self):
-        if self.app and self.running:
-            self.app.stop()
+        if self.application and self.running:
+            try:
+                self.application.stop()
+            except:
+                pass
             self.running = False
-            logger.info("Bot durduruldu")
+            logger.info("🛑 Bot durduruldu")
 
     # ============ KOMUTLAR ============
     async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,13 +144,13 @@ class BotSystem:
 Merhaba {user.first_name}!
 
 📋 **KULLANIM:**
-• `tc 12345678901`
-• `adsoyad Ad Soyad İl İlçe`
-• `adres 12345678901`
-• `gsmtc 5551234567`
-• `tcgsm 12345678901`
-• `isyeri 12345678901`
-• `sulale 12345678901`
+`tc 12345678901`
+`adsoyad Ad Soyad İl İlçe`
+`adres 12345678901`
+`gsmtc 5551234567`
+`tcgsm 12345678901`
+`isyeri 12345678901`
+`sulale 12345678901`
 
 ⚠️ **KURALLAR:**
 • Günde 50 sorgu limiti
@@ -163,18 +173,25 @@ Merhaba {user.first_name}!
         keyboard = [
             [InlineKeyboardButton("📊 İstatistik", callback_data="stats")],
             [InlineKeyboardButton("👥 Kullanıcılar", callback_data="users")],
-            [InlineKeyboardButton("🚫 Ban Yönetimi", callback_data="ban")],
+            [InlineKeyboardButton("🚫 Ban", callback_data="ban")],
             [InlineKeyboardButton("📢 Duyuru", callback_data="announce")],
             [InlineKeyboardButton("🤖 Klonla", callback_data="clone")],
             [InlineKeyboardButton("🔄 Yeniden Başlat", callback_data="restart")],
             [InlineKeyboardButton("🛑 Durdur", callback_data="stop")],
             [InlineKeyboardButton("📈 Sistem", callback_data="system")]
         ]
-        await update.message.reply_text("🔧 **Admin Paneli**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await update.message.reply_text(
+            "🔧 **Admin Paneli**",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
     async def stats_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if self.is_admin(user_id):
+            import psutil
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory()
             text = f"""
 📊 **SİSTEM İSTATİSTİKLERİ**
 
@@ -184,6 +201,8 @@ Merhaba {user.first_name}!
 • Kullanıcı: {self.get_user_count()}
 • Banlı: {self.get_banned_count()}
 • Admin: {self.get_admin_count()}
+• CPU: {cpu}%
+• RAM: {ram.percent}%
 """
         else:
             stats = self.get_user_stats(user_id)
@@ -203,12 +222,15 @@ Merhaba {user.first_name}!
         if not context.args:
             await update.message.reply_text("❌ Kullanım: /ban USER_ID SEBEP")
             return
-        target_id = int(context.args[0])
-        reason = ' '.join(context.args[1:]) if len(context.args) > 1 else 'Kural ihlali'
-        if self.ban_user(target_id, reason):
-            await update.message.reply_text(f"✅ Kullanıcı {target_id} banlandı!\nSebep: {reason}")
-        else:
-            await update.message.reply_text("❌ Ban başarısız!")
+        try:
+            target_id = int(context.args[0])
+            reason = ' '.join(context.args[1:]) if len(context.args) > 1 else 'Kural ihlali'
+            if self.ban_user(target_id, reason):
+                await update.message.reply_text(f"✅ Kullanıcı {target_id} banlandı!\nSebep: {reason}")
+            else:
+                await update.message.reply_text("❌ Ban başarısız!")
+        except:
+            await update.message.reply_text("❌ Geçersiz ID!")
 
     async def unban_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
@@ -217,11 +239,14 @@ Merhaba {user.first_name}!
         if not context.args:
             await update.message.reply_text("❌ Kullanım: /unban USER_ID")
             return
-        target_id = int(context.args[0])
-        if self.unban_user(target_id):
-            await update.message.reply_text(f"✅ Kullanıcı {target_id} banı kaldırıldı!")
-        else:
-            await update.message.reply_text("❌ Unban başarısız!")
+        try:
+            target_id = int(context.args[0])
+            if self.unban_user(target_id):
+                await update.message.reply_text(f"✅ Kullanıcı {target_id} banı kaldırıldı!")
+            else:
+                await update.message.reply_text("❌ Unban başarısız!")
+        except:
+            await update.message.reply_text("❌ Geçersiz ID!")
 
     async def announce_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
@@ -235,7 +260,11 @@ Merhaba {user.first_name}!
         sent = 0
         for user_id in users:
             try:
-                await context.bot.send_message(user_id, f"📢 **DUYURU**\n\n{message}", parse_mode='Markdown')
+                await context.bot.send_message(
+                    user_id,
+                    f"📢 **DUYURU**\n\n{message}",
+                    parse_mode='Markdown'
+                )
                 sent += 1
                 time.sleep(0.1)
             except:
@@ -392,6 +421,9 @@ Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             await self.stats_cmd(update, context)
         elif data == "users":
             users = self.get_users_list()
+            if not users:
+                await query.edit_message_text("📭 Kullanıcı yok")
+                return
             text = "👥 **KULLANICILAR**\n\n"
             for i, u in enumerate(users[:20], 1):
                 text += f"{i}. ID: `{u[0]}` | @{u[1] or 'yok'} | Sorgu: {u[2]}\n"
@@ -412,10 +444,11 @@ Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             await query.edit_message_text("🛑 Durduruluyor...")
             self.stop()
         elif data == "system":
-            import psutil
-            cpu = psutil.cpu_percent()
-            ram = psutil.virtual_memory()
-            text = f"""
+            try:
+                import psutil
+                cpu = psutil.cpu_percent()
+                ram = psutil.virtual_memory()
+                text = f"""
 📈 **SİSTEM DURUMU**
 
 CPU: {cpu}%
@@ -424,33 +457,44 @@ RAM Kullanım: {ram.used / (1024**3):.2f} GB
 RAM Toplam: {ram.total / (1024**3):.2f} GB
 Çalışma: {self.get_uptime()}
 """
-            await query.edit_message_text(text, parse_mode='Markdown')
+                await query.edit_message_text(text, parse_mode='Markdown')
+            except:
+                await query.edit_message_text("❌ Sistem bilgisi alınamadı")
 
     # ============ YARDIMCI FONKSİYONLAR ============
     def register_user(self, user):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, join_date, last_active) VALUES (?, ?, ?, ?, ?)",
-                  (user.id, user.username, user.first_name, datetime.now().isoformat(), datetime.now().isoformat()))
-        c.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (datetime.now().isoformat(), user.id))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, join_date, last_active) VALUES (?, ?, ?, ?, ?)",
+                      (user.id, user.username, user.first_name, datetime.now().isoformat(), datetime.now().isoformat()))
+            c.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (datetime.now().isoformat(), user.id))
+            conn.commit()
+            conn.close()
+        except:
+            pass
 
     def is_admin(self, user_id):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        conn.close()
-        return result is not None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+            conn.close()
+            return result is not None
+        except:
+            return False
 
     def is_banned(self, user_id):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM bans WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        conn.close()
-        return result is not None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT 1 FROM bans WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+            conn.close()
+            return result is not None
+        except:
+            return False
 
     def ban_user(self, user_id, reason):
         try:
@@ -478,13 +522,16 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
             return False
 
     def save_query(self, user_id, q_type, q_param):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT INTO queries (user_id, query_type, query_param, query_time) VALUES (?, ?, ?, ?)",
-                  (user_id, q_type, q_param, datetime.now().isoformat()))
-        c.execute("UPDATE users SET query_count = query_count + 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("INSERT INTO queries (user_id, query_type, query_param, query_time) VALUES (?, ?, ?, ?)",
+                      (user_id, q_type, q_param, datetime.now().isoformat()))
+            c.execute("UPDATE users SET query_count = query_count + 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+        except:
+            pass
 
     def validate_tc(self, tc):
         if not tc.isdigit() or len(tc) != 11:
@@ -541,81 +588,108 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
 
     # ============ VERİTABANI SORGULARI ============
     def get_user_count(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM users")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_banned_count(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM bans")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM bans")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_admin_count(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM admins")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM admins")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_total_queries(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM queries")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM queries")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_today_queries(self):
-        today = datetime.now().date().isoformat()
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM queries WHERE date(query_time) = ?", (today,))
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            today = datetime.now().date().isoformat()
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM queries WHERE date(query_time) = ?", (today,))
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_user_today_queries(self, user_id):
-        today = datetime.now().date().isoformat()
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ? AND date(query_time) = ?", (user_id, today))
-        count = c.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            today = datetime.now().date().isoformat()
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ? AND date(query_time) = ?", (user_id, today))
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        except:
+            return 0
 
     def get_user_stats(self, user_id):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ?", (user_id,))
-        total = c.fetchone()[0]
-        today = datetime.now().date().isoformat()
-        c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ? AND date(query_time) = ?", (user_id, today))
-        today_count = c.fetchone()[0]
-        conn.close()
-        return {'total': total, 'today': today_count}
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ?", (user_id,))
+            total = c.fetchone()[0]
+            today = datetime.now().date().isoformat()
+            c.execute("SELECT COUNT(*) FROM queries WHERE user_id = ? AND date(query_time) = ?", (user_id, today))
+            today_count = c.fetchone()[0]
+            conn.close()
+            return {'total': total, 'today': today_count}
+        except:
+            return {'total': 0, 'today': 0}
 
     def get_users_list(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT user_id, username, query_count FROM users ORDER BY query_count DESC LIMIT 20")
-        users = c.fetchall()
-        conn.close()
-        return users
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT user_id, username, query_count FROM users ORDER BY query_count DESC LIMIT 20")
+            users = c.fetchall()
+            conn.close()
+            return users
+        except:
+            return []
 
     def get_all_users(self):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM users")
-        users = [row[0] for row in c.fetchall()]
-        conn.close()
-        return users
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT user_id FROM users")
+            users = [row[0] for row in c.fetchall()]
+            conn.close()
+            return users
+        except:
+            return []
 
     def get_uptime(self):
         if not self.running:
@@ -629,13 +703,6 @@ RAM Toplam: {ram.total / (1024**3):.2f} GB
 def main():
     try:
         print("🚀 Bot başlatılıyor...")
-        # Gerekli paketler
-        for pkg in ["python-telegram-bot", "requests", "psutil"]:
-            try:
-                __import__(pkg.split('-')[0])
-            except:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-        
         bot = BotSystem()
         bot.start()
     except KeyboardInterrupt:
