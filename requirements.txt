@@ -3,4 +3,3 @@ requests==2.31.0
 psutil==5.9.6
 cloudscraper==1.2.71
 fake-useragent==1.4.0
-selenium==4.15.2
