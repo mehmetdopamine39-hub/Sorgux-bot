@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: sorgu-botu
+    name: sorgux-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
