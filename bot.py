@@ -1,4 +1,4 @@
-# bot.py - Webhook ile Render Uyumlu, Cloudflare Bypass
+# bot.py - Polling ile Render Uyumlu, Conflict Çözümlü
 import os
 import re
 import sys
@@ -9,7 +9,6 @@ import logging
 import subprocess
 from datetime import datetime
 from typing import Dict, List, Tuple
-from fake_useragent import UserAgent
 
 # Cloudflare bypass
 try:
@@ -32,8 +31,6 @@ BOT_TOKEN = "8853911485:AAEtjm2Y7640cMVlAIuYfM63JyKuyr4Lqck"
 OWNER_ID = 8610336203
 DB_PATH = "bot_data.db"
 REQUIRED_CHANNELS = ["@iosstarturkiyee", "@rinexsorgux", "@izinsizleriz"]
-PORT = int(os.environ.get("PORT", 10000))
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL", f"https://sorgu-botu.onrender.com")
 
 # API'ler
 APIS = {
@@ -128,13 +125,11 @@ class BotSystem:
             
             self.running = True
             
-            # Webhook kullan - Conflict hatasını çözer
-            logger.info(f"🌐 Webhook kuruluyor: {WEBHOOK_URL}/webhook")
-            self.application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path="webhook",
-                webhook_url=f"{WEBHOOK_URL}/webhook"
+            # Polling ile başlat - Conflict hatasını önlemek için
+            logger.info("📡 Polling başlatılıyor...")
+            self.application.run_polling(
+                drop_pending_updates=True,  # Bekleyen güncellemeleri temizle
+                stop_signals=None  # Sinyal işlemeyi devre dışı bırak
             )
             
         except Exception as e:
@@ -312,7 +307,8 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
         await update.message.reply_text("🔄 Yeniden başlatılıyor...")
         self.stop()
         time.sleep(2)
-        self.start()
+        # Yeni instance başlat
+        os.execv(sys.executable, ['python'] + sys.argv)
 
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id != OWNER_ID:
@@ -320,6 +316,7 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
             return
         await update.message.reply_text("🛑 Durduruluyor...")
         self.stop()
+        sys.exit(0)
 
     # ============ CALLBACK İŞLEMLERİ ============
     async def callback_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,10 +418,11 @@ Aşağıdaki butonlardan sorgulama yapabilirsiniz.
             await query.edit_message_text("🔄 Yeniden başlatılıyor...")
             self.stop()
             time.sleep(2)
-            self.start()
+            os.execv(sys.executable, ['python'] + sys.argv)
         elif data == "admin_stop":
             await query.edit_message_text("🛑 Durduruluyor...")
             self.stop()
+            sys.exit(0)
         elif data == "admin_system":
             await self.show_system(query)
 
