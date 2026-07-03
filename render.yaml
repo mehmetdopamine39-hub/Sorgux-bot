@@ -4,11 +4,10 @@ services:
     runtime: python
     buildCommand: |
       pip install -r requirements.txt
-      pip install requests[socks]
     startCommand: python bot.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: PIP_DEFAULT_TIMEOUT
-        value: "100"
+      - key: RENDER_EXTERNAL_URL
+        value: https://sorgux-bot.onrender.com
     plan: free
